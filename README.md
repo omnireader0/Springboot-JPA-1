@@ -1252,3 +1252,165 @@ logging.level:
 이제 테스트에서 스프링을 실행하면 이 위치에 있는 설정 파일을 읽는다. (만약 이 위치에 없으면 `src/resources/application.yml` 을 읽는다.)
 
 스프링 부트는 datasource 설정이 없으면, 기본적을 메모리 DB를 사용하고, driver-class도 현재 등록된 라이브러를 보고 찾아준다. 추가로 `ddl-auto` 도 `create-drop` 모드로 동작한다. 따라서 데이터소스나, JPA 관련된 별도의 추가 설정을 하지 않아도 된다.
+
+
+
+## 6. 상품 도메인 개발
+
+### 6.1 상품 엔티티 개발(비지니스 로직 추가)
+
+#### 상품 엔티티 - 비지니스 로직 추가
+
+~~~java
+package jpabook.jpashop.domain.item;
+
+import jpabook.jpashop.exception.NotEnoughStockException;
+import lombok.Getter;
+import lombok.Setter;
+
+import jpabook.jpashop.domain.Category;
+import javax.persistence.*;
+import java.util.ArrayList;
+import java.util.List;
+
+@Entity
+@Inheritance(strategy = InheritanceType.SINGLE_TABLE)
+@DiscriminatorColumn(name = "dtype")
+@Getter @Setter
+public abstract class Item {
+    
+    @Id @GeneratedValue
+    @Column(name = "item_id")
+    private Long id;
+    
+    private String name;
+    private int price;
+    private int stockQuantity;
+    
+    @ManyToMany(mappedBy = "items")
+    private List<Category> categories = new ArrayList<Category>();
+    
+    //==비즈니스 로직==//
+    public void addStock(int quantity) {
+        this.stockQuantity += quantity;
+    }
+    
+    public void removeStock(int quantity) {
+        int restStock = this.stockQuantity - quantity;
+        if (restStock < 0) {
+            throw new NotEnoughStockException("need more stock");
+        }
+        this.stockQuantity = restStock;
+    }
+}
+~~~
+
+#### 예외 추가
+
+~~~~java
+package jpabook.jpashop.exception;
+public class NotEnoughStockException extends RuntimeException {
+    
+    public NotEnoughStockException() {
+    }
+    
+    public NotEnoughStockException(String message) {
+        super(message);
+    }
+    
+    public NotEnoughStockException(String message, Throwable cause) {
+        super(message, cause);
+    }
+    
+    public NotEnoughStockException(Throwable cause) {
+        super(cause);
+    }
+}
+~~~~
+
+**비즈니스 로직 분석**
+
+- 엔티티 쪽에 메서드 작성하는 이유 : 내부에서 재고 양을 바꾸는 것이 객체지향적, (밖에서 setter로 재고양을 가져와서 바꾸는 것이 아니라!)
+  - 응집력 측면에서 해당하는 entity에 함수에 관련된 로직 넣기
+  - 도메인 스스로 해결할 수 있는 경우는 도메인 안에서 처리하는 것도 좋은 방법이 됨
+
+- `addStock()` 메서드는 파라미터로 넘어온 수만큼 재고를 늘린다. 이 메서드는 재고가 증가하거나 상품 주문을 취소해서 재고를 다시 늘려야 할 때 사용한다.
+- `removeStock()` 메서드는 파라미터로 넘어온 수만큼 재고를 줄인다. 만약 재고가 부족하면 예외가 발생한다. 주로 상품을 주문할 때 사용한다.
+
+### 6.2 상품 리포지토리 개발
+
+~~~java
+package jpabook.jpashop.repository;
+
+import jpabook.jpashop.domain.item.Item;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Repository;
+
+import javax.persistence.EntityManager;
+import java.util.List;
+
+@Repository
+@RequiredArgsConstructor
+public class ItemRepository {
+
+    private final EntityManager em;
+
+    public void save(Item item) {
+        if (item.getId() == null) { 
+            em.persist(item); // 신규 등록
+        } else {
+            em.merge(item); // 갱신
+        }
+    }
+
+    public Item findOne(Long id) {
+        return em.find(Item.class, id);
+    }
+
+    public List<Item> findAll() {
+        return em.createQuery("select i from Item i",Item.class).getResultList();
+    }
+}
+~~~
+
+**기능 설명**
+
+- `save()`
+  - `id` 가 없으면 신규로 보고 `persist()` 실행
+  - `id` 가 있으면 이미 데이터베이스에 저장된 엔티티를 수정한다고 보고, `merge()` 를 실행
+
+### 6.3 상품 서비스 개발
+
+~~~java
+package jpabook.jpashop.service;
+
+import jpabook.jpashop.domain.item.Item;
+import jpabook.jpashop.repository.ItemRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import java.util.List;
+
+@Service
+@Transactional(readOnly = true)
+@RequiredArgsConstructor
+public class ItemService {
+    
+    private final ItemRepository itemRepository;
+    
+    @Transactional
+    public void saveItem(Item item) {
+        itemRepository.save(item);
+    }
+    
+    public List<Item> findItems() {
+        return itemRepository.findAll();
+    }
+    
+    public Item findOne(Long itemId) {
+        return itemRepository.findOne(itemId);
+    }
+}
+~~~
+
+상품 서비스는 상품 리포지토리에 단순히 위임만 하는 클래스
