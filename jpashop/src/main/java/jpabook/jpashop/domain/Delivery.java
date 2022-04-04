@@ -2,7 +2,6 @@ package jpabook.jpashop.domain;
 
 import lombok.Getter;
 import lombok.Setter;
-import org.graalvm.compiler.core.common.type.ArithmeticOpTable;
 
 import javax.persistence.*;
 
